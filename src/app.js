@@ -14,6 +14,10 @@ app.use(express.json());
 
 // Routes (step by step add korbo)
 // app.use('/api/auth', require('./routes/auth'));
+app.use('/api/auth', require('./routes/auth'));
+
+
+
 
 app.get('/', (req, res) => {
     res.json({ message: 'Crowdfunding API is running' });
