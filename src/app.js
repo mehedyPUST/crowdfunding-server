@@ -15,8 +15,8 @@ app.use(express.json());
 // Routes (step by step add korbo)
 // app.use('/api/auth', require('./routes/auth'));
 app.use('/api/auth', require('./routes/auth'));
-
-
+app.use('/api/campaigns', require('./routes/campaign'));
+app.use('/api/withdrawals', require('./routes/withdrawal'));
 
 
 app.get('/', (req, res) => {
