@@ -4,7 +4,47 @@ const verifyToken = require('../middleware/verifyToken');
 const { ObjectId } = require('mongodb');
 const router = express.Router();
 
-// Add campaign (creator only)
+// ========== ORDER MATTERS ==========
+
+// 1. GET all approved campaigns (PUBLIC - no auth required)
+router.get('/', async (req, res) => {
+    try {
+        const db = await getDb();
+        const now = new Date();
+        const campaigns = await db
+            .collection('campaigns')
+            .find({ status: 'approved', deadline: { $gt: now } })
+            .sort({ createdAt: -1 })
+            .toArray();
+        res.json(campaigns);
+    } catch (err) {
+        console.error('Explore campaigns error:', err);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// 2. GET my campaigns (CREATOR - must be BEFORE /:id)
+router.get('/my', verifyToken, async (req, res) => {
+    try {
+        if (req.user.role !== 'creator') {
+            return res.status(403).json({ error: 'Access denied' });
+        }
+
+        const db = await getDb();
+        const campaigns = await db
+            .collection('campaigns')
+            .find({ creatorEmail: req.user.email })
+            .sort({ deadline: -1 })
+            .toArray();
+
+        res.json(campaigns);
+    } catch (err) {
+        console.error('My campaigns error:', err);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// 3. POST create campaign (CREATOR)
 router.post('/', verifyToken, async (req, res) => {
     try {
         if (req.user.role !== 'creator') {
@@ -46,28 +86,19 @@ router.post('/', verifyToken, async (req, res) => {
     }
 });
 
-// Get my campaigns (creator)
-router.get('/my', verifyToken, async (req, res) => {
+// 4. GET single campaign by ID (must be AFTER /my)
+router.get('/:id', async (req, res) => {
     try {
-        if (req.user.role !== 'creator') {
-            return res.status(403).json({ error: 'Access denied' });
-        }
-
         const db = await getDb();
-        const campaigns = await db
-            .collection('campaigns')
-            .find({ creatorEmail: req.user.email })
-            .sort({ deadline: -1 })
-            .toArray();
-
-        res.json(campaigns);
+        const campaign = await db.collection('campaigns').findOne({ _id: new ObjectId(req.params.id) });
+        if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+        res.json(campaign);
     } catch (err) {
-        console.error('My campaigns error:', err);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
 
-// Update campaign
+// 5. PUT update campaign (CREATOR)
 router.put('/:id', verifyToken, async (req, res) => {
     try {
         const db = await getDb();
@@ -90,41 +121,9 @@ router.put('/:id', verifyToken, async (req, res) => {
     }
 });
 
-// Get approved campaigns (for supporters to explore)
-router.get('/', async (req, res) => {
-    try {
-        const db = await getDb();
-        const now = new Date();
-        const campaigns = await db
-            .collection('campaigns')
-            .find({ status: 'approved', deadline: { $gt: now } })
-            .sort({ createdAt: -1 })
-            .toArray();
-
-        res.json(campaigns);
-    } catch (err) {
-        console.error('Explore campaigns error:', err);
-        res.status(500).json({ error: 'Internal server error' });
-    }
-});
-
-// Get single campaign
-router.get('/:id', async (req, res) => {
-    try {
-        const db = await getDb();
-        const campaign = await db.collection('campaigns').findOne({ _id: new ObjectId(req.params.id) });
-        if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
-        res.json(campaign);
-    } catch (err) {
-        res.status(500).json({ error: 'Internal server error' });
-    }
-});
-
-
-// Delete campaign
+// 6. DELETE campaign (CREATOR)
 router.delete('/:id', verifyToken, async (req, res) => {
     try {
-        const { ObjectId } = require('mongodb');
         const db = await getDb();
         const campaign = await db.collection('campaigns').findOne({ _id: new ObjectId(req.params.id), creatorEmail: req.user.email });
 
