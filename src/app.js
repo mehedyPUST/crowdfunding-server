@@ -15,13 +15,13 @@ app.use(express.json());
 // Routes (step by step add korbo)
 // app.use('/api/auth', require('./routes/auth'));
 app.use('/api/auth', require('./routes/auth'));
-app.use('/api/campaigns', require('./routes/campaign'));
-app.use('/api/withdrawals', require('./routes/withdrawal'));
-app.use('/api/contributions', require('./routes/contribution'));
-app.use('/api/payments', require('./routes/payment'));
-app.use('/api/admin', require('./routes/admin'));
-app.use('/api/notifications', require('./routes/notification'));
-app.use('/api/chatbot', require('./routes/chatbot'));
+// app.use('/api/campaigns', require('./routes/campaign'));
+// app.use('/api/withdrawals', require('./routes/withdrawal'));
+// app.use('/api/contributions', require('./routes/contribution'));
+// app.use('/api/payments', require('./routes/payment'));
+// app.use('/api/admin', require('./routes/admin'));
+// app.use('/api/notifications', require('./routes/notification'));
+// app.use('/api/chatbot', require('./routes/chatbot'));
 
 
 app.get('/', (req, res) => {
