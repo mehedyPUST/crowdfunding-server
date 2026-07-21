@@ -83,34 +83,67 @@ router.post('/confirm', verifyToken, async (req, res) => {
         const pkg = packages[packageId];
         if (!pkg) return res.status(400).json({ error: 'Invalid package' });
 
-        let paymentStatus = 'succeeded';
         let paymentId = paymentIntentId;
+        let paymentVerified = false;
 
         // Check if it's a Checkout Session ID (starts with 'cs_')
         if (paymentIntentId && paymentIntentId.startsWith('cs_')) {
             const session = await stripe.checkout.sessions.retrieve(paymentIntentId);
-            paymentStatus = session.payment_status;
-            paymentId = session.payment_intent || paymentIntentId;
-        } else if (paymentIntentId) {
+            if (session.payment_status === 'paid') {
+                paymentVerified = true;
+                paymentId = session.id;
+            } else {
+                return res.status(400).json({
+                    error: `Payment not completed. Status: ${session.payment_status}`
+                });
+            }
+        }
+        // Check if it's a Payment Intent ID (starts with 'pi_')
+        else if (paymentIntentId && paymentIntentId.startsWith('pi_')) {
             const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
-            paymentStatus = paymentIntent.status;
-        } else {
-            // Dummy payment fallback
-            paymentStatus = 'succeeded';
+            if (paymentIntent.status === 'succeeded') {
+                paymentVerified = true;
+                paymentId = paymentIntent.id;
+            } else {
+                return res.status(400).json({
+                    error: `Payment not completed. Status: ${paymentIntent.status}`
+                });
+            }
+        }
+        // Fallback for dummy payments
+        else {
+            paymentVerified = true;
             paymentId = 'dummy_' + Date.now();
         }
 
-        if (paymentStatus !== 'succeeded' && paymentStatus !== 'paid') {
-            return res.status(400).json({ error: 'Payment not completed' });
+        if (!paymentVerified) {
+            return res.status(400).json({ error: 'Payment verification failed' });
         }
 
         const db = await getDb();
 
+        // Check if already credited (prevent double crediting)
+        const existing = await db.collection('payments').findOne({
+            paymentIntentId: paymentId,
+            userEmail: req.user.email
+        });
+
+        if (existing) {
+            const user = await db.collection('users').findOne({ email: req.user.email });
+            return res.json({
+                message: 'Already credited',
+                credits: user.credits,
+                alreadyCredited: true
+            });
+        }
+
         // Add credits to user
-        await db.collection('users').updateOne(
+        const updateResult = await db.collection('users').updateOne(
             { email: req.user.email },
             { $inc: { credits: pkg.credits } }
         );
+
+        console.log('Credit update result:', updateResult);
 
         // Save payment record
         await db.collection('payments').insertOne({
@@ -124,10 +157,16 @@ router.post('/confirm', verifyToken, async (req, res) => {
 
         // Return updated credits
         const user = await db.collection('users').findOne({ email: req.user.email });
-        res.json({ message: 'Payment successful', credits: user.credits });
+        console.log('Updated user credits:', user.credits);
+
+        res.json({
+            message: 'Payment successful',
+            credits: user.credits,
+            addedCredits: pkg.credits
+        });
     } catch (err) {
         console.error('Payment confirm error:', err);
-        res.status(500).json({ error: 'Confirmation failed' });
+        res.status(500).json({ error: 'Confirmation failed: ' + err.message });
     }
 });
 
