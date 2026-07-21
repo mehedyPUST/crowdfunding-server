@@ -4,6 +4,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { OAuth2Client } = require('google-auth-library');
 const getDb = require('../db');
+const verifyToken = require('../middleware/verifyToken');
 
 const router = express.Router();
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
@@ -70,6 +71,7 @@ router.post('/register', async (req, res) => {
                 role: newUser.role,
                 credits: newUser.credits,
                 photoURL: newUser.photoURL,
+                createdAt: newUser.createdAt,
             },
         });
     } catch (err) {
@@ -113,6 +115,7 @@ router.post('/login', async (req, res) => {
                 role: user.role,
                 credits: user.credits,
                 photoURL: user.photoURL,
+                createdAt: user.createdAt,
             },
         });
     } catch (err) {
@@ -175,10 +178,87 @@ router.post('/google-login', async (req, res) => {
                 role: user.role,
                 credits: user.credits,
                 photoURL: user.photoURL,
+                createdAt: user.createdAt,
             },
         });
     } catch (err) {
         console.error('Google login error:', err);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// ----- UPDATE PROFILE -----
+router.put('/profile', verifyToken, async (req, res) => {
+    try {
+        const { name, photoURL } = req.body;
+
+        if (!name) {
+            return res.status(400).json({ error: 'Name is required' });
+        }
+
+        const db = await getDb();
+        await db.collection('users').updateOne(
+            { email: req.user.email },
+            { $set: { name, photoURL: photoURL || '' } }
+        );
+
+        const updated = await db.collection('users').findOne(
+            { email: req.user.email },
+            { projection: { password: 0 } }
+        );
+
+        res.json({
+            message: 'Profile updated',
+            user: {
+                name: updated.name,
+                email: updated.email,
+                role: updated.role,
+                credits: updated.credits,
+                photoURL: updated.photoURL,
+                createdAt: updated.createdAt,
+            },
+        });
+    } catch (err) {
+        console.error('Profile update error:', err);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// ----- CHANGE PASSWORD -----
+router.put('/change-password', verifyToken, async (req, res) => {
+    try {
+        const { currentPassword, newPassword } = req.body;
+
+        if (!currentPassword || !newPassword) {
+            return res.status(400).json({ error: 'Current and new password required' });
+        }
+
+        if (newPassword.length < 6) {
+            return res.status(400).json({ error: 'New password must be at least 6 characters' });
+        }
+
+        const db = await getDb();
+        const user = await db.collection('users').findOne({ email: req.user.email });
+
+        // If user has no password (Google sign-in), set new password directly
+        if (user.password) {
+            const isMatch = await bcrypt.compare(currentPassword, user.password);
+            if (!isMatch) {
+                return res.status(400).json({ error: 'Current password is incorrect' });
+            }
+        }
+
+        const salt = await bcrypt.genSalt(10);
+        const hashedPassword = await bcrypt.hash(newPassword, salt);
+
+        await db.collection('users').updateOne(
+            { email: req.user.email },
+            { $set: { password: hashedPassword } }
+        );
+
+        res.json({ message: 'Password changed successfully' });
+    } catch (err) {
+        console.error('Change password error:', err);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
