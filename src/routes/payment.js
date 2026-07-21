@@ -18,7 +18,6 @@ router.post('/create-intent', verifyToken, async (req, res) => {
     try {
         const { packageId } = req.body;
         const pkg = packages[packageId];
-
         if (!pkg) return res.status(400).json({ error: 'Invalid package' });
 
         const paymentIntent = await stripe.paymentIntents.create({
@@ -86,7 +85,6 @@ router.post('/confirm', verifyToken, async (req, res) => {
         let paymentId = paymentIntentId;
         let paymentVerified = false;
 
-        // Check if it's a Checkout Session ID (starts with 'cs_')
         if (paymentIntentId && paymentIntentId.startsWith('cs_')) {
             const session = await stripe.checkout.sessions.retrieve(paymentIntentId);
             if (session.payment_status === 'paid') {
@@ -97,9 +95,7 @@ router.post('/confirm', verifyToken, async (req, res) => {
                     error: `Payment not completed. Status: ${session.payment_status}`
                 });
             }
-        }
-        // Check if it's a Payment Intent ID (starts with 'pi_')
-        else if (paymentIntentId && paymentIntentId.startsWith('pi_')) {
+        } else if (paymentIntentId && paymentIntentId.startsWith('pi_')) {
             const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
             if (paymentIntent.status === 'succeeded') {
                 paymentVerified = true;
@@ -109,9 +105,7 @@ router.post('/confirm', verifyToken, async (req, res) => {
                     error: `Payment not completed. Status: ${paymentIntent.status}`
                 });
             }
-        }
-        // Fallback for dummy payments
-        else {
+        } else {
             paymentVerified = true;
             paymentId = 'dummy_' + Date.now();
         }
@@ -122,32 +116,48 @@ router.post('/confirm', verifyToken, async (req, res) => {
 
         const db = await getDb();
 
-        // Check if already credited (prevent double crediting)
+        // Check duplicate payment
         const existing = await db.collection('payments').findOne({
-            paymentIntentId: paymentId,
-            userEmail: req.user.email
+            paymentIntentId: paymentId
         });
 
         if (existing) {
-            const user = await db.collection('users').findOne({ email: req.user.email });
+            const user = await db.collection('users').findOne({
+                email: req.user.email.toLowerCase().trim()
+            });
             return res.json({
                 message: 'Already credited',
-                credits: user.credits,
+                credits: user?.credits || 0,
                 alreadyCredited: true
             });
         }
 
-        // Add credits to user
+        // Add credits with exact email match
+        const userEmail = req.user.email.toLowerCase().trim();
+        console.log('Adding credits to:', userEmail, 'amount:', pkg.credits);
+
         const updateResult = await db.collection('users').updateOne(
-            { email: req.user.email },
+            { email: userEmail },
             { $inc: { credits: pkg.credits } }
         );
 
-        console.log('Credit update result:', updateResult);
+        console.log('Update result:', updateResult);
+
+        if (updateResult.matchedCount === 0) {
+            return res.status(404).json({
+                error: 'User not found with email: ' + userEmail
+            });
+        }
+
+        if (updateResult.modifiedCount === 0) {
+            return res.status(500).json({
+                error: 'Failed to update credits. Please try again.'
+            });
+        }
 
         // Save payment record
         await db.collection('payments').insertOne({
-            userEmail: req.user.email,
+            userEmail: userEmail,
             packageId,
             credits: pkg.credits,
             amount: pkg.price,
@@ -155,9 +165,9 @@ router.post('/confirm', verifyToken, async (req, res) => {
             date: new Date(),
         });
 
-        // Return updated credits
-        const user = await db.collection('users').findOne({ email: req.user.email });
-        console.log('Updated user credits:', user.credits);
+        // Return updated user
+        const user = await db.collection('users').findOne({ email: userEmail });
+        console.log('Updated user credits:', user?.credits);
 
         res.json({
             message: 'Payment successful',
@@ -176,7 +186,7 @@ router.get('/history', verifyToken, async (req, res) => {
         const db = await getDb();
         const payments = await db
             .collection('payments')
-            .find({ userEmail: req.user.email })
+            .find({ userEmail: req.user.email.toLowerCase().trim() })
             .sort({ date: -1 })
             .toArray();
         res.json(payments);
