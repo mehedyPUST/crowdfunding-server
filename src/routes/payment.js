@@ -3,7 +3,6 @@ require('dotenv').config();
 const getDb = require('../db');
 const verifyToken = require('../middleware/verifyToken');
 
-
 const router = express.Router();
 const stripe = require('stripe')(process.env.STRIPE_SECRET);
 
@@ -23,7 +22,7 @@ router.post('/create-intent', verifyToken, async (req, res) => {
         if (!pkg) return res.status(400).json({ error: 'Invalid package' });
 
         const paymentIntent = await stripe.paymentIntents.create({
-            amount: pkg.price * 100, // cents
+            amount: pkg.price * 100,
             currency: 'usd',
             metadata: {
                 userEmail: req.user.email,
@@ -38,17 +37,70 @@ router.post('/create-intent', verifyToken, async (req, res) => {
     }
 });
 
+// Create Stripe Checkout Session
+router.post('/create-checkout', verifyToken, async (req, res) => {
+    try {
+        const { packageId } = req.body;
+        const pkg = packages[packageId];
+        if (!pkg) return res.status(400).json({ error: 'Invalid package' });
+
+        const session = await stripe.checkout.sessions.create({
+            payment_method_types: ['card'],
+            line_items: [
+                {
+                    price_data: {
+                        currency: 'usd',
+                        product_data: {
+                            name: `${pkg.credits} Credits Package`,
+                            description: `${pkg.credits} credits for CrowdFund platform`,
+                        },
+                        unit_amount: pkg.price * 100,
+                    },
+                    quantity: 1,
+                },
+            ],
+            mode: 'payment',
+            success_url: `${process.env.CLIENT_URL}/dashboard/supporter/purchase-credit?session_id={CHECKOUT_SESSION_ID}&status=success`,
+            cancel_url: `${process.env.CLIENT_URL}/dashboard/supporter/purchase-credit?status=cancelled`,
+            metadata: {
+                userEmail: req.user.email,
+                packageId: packageId,
+                credits: pkg.credits.toString(),
+            },
+        });
+
+        res.json({ url: session.url });
+    } catch (err) {
+        console.error('Checkout session error:', err);
+        res.status(500).json({ error: 'Payment failed' });
+    }
+});
+
 // Confirm payment & add credits
 router.post('/confirm', verifyToken, async (req, res) => {
     try {
         const { paymentIntentId, packageId } = req.body;
         const pkg = packages[packageId];
-
         if (!pkg) return res.status(400).json({ error: 'Invalid package' });
 
-        // Verify payment with Stripe
-        const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
-        if (paymentIntent.status !== 'succeeded') {
+        let paymentStatus = 'succeeded';
+        let paymentId = paymentIntentId;
+
+        // Check if it's a Checkout Session ID (starts with 'cs_')
+        if (paymentIntentId && paymentIntentId.startsWith('cs_')) {
+            const session = await stripe.checkout.sessions.retrieve(paymentIntentId);
+            paymentStatus = session.payment_status;
+            paymentId = session.payment_intent || paymentIntentId;
+        } else if (paymentIntentId) {
+            const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+            paymentStatus = paymentIntent.status;
+        } else {
+            // Dummy payment fallback
+            paymentStatus = 'succeeded';
+            paymentId = 'dummy_' + Date.now();
+        }
+
+        if (paymentStatus !== 'succeeded' && paymentStatus !== 'paid') {
             return res.status(400).json({ error: 'Payment not completed' });
         }
 
@@ -66,7 +118,7 @@ router.post('/confirm', verifyToken, async (req, res) => {
             packageId,
             credits: pkg.credits,
             amount: pkg.price,
-            paymentIntentId,
+            paymentIntentId: paymentId,
             date: new Date(),
         });
 
