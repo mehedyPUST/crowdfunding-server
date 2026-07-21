@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
@@ -5,7 +6,6 @@ const { OAuth2Client } = require('google-auth-library');
 const getDb = require('../db');
 
 const router = express.Router();
-
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 
 // ----- REGISTER -----
@@ -179,6 +179,33 @@ router.post('/google-login', async (req, res) => {
         });
     } catch (err) {
         console.error('Google login error:', err);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// ----- GET ALL USERS (ADMIN) -----
+router.get('/users', async (req, res) => {
+    try {
+        const authHeader = req.headers.authorization;
+        if (!authHeader || !authHeader.startsWith('Bearer ')) {
+            return res.status(401).json({ error: 'Access denied' });
+        }
+
+        const token = authHeader.split(' ')[1];
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+        if (decoded.role !== 'admin') {
+            return res.status(403).json({ error: 'Admin access required' });
+        }
+
+        const db = await getDb();
+        const { role } = req.query;
+        const filter = role ? { role } : {};
+        const users = await db.collection('users').find(filter).project({ password: 0 }).toArray();
+
+        res.json(users);
+    } catch (err) {
+        console.error('Get users error:', err);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
