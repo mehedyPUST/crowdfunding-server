@@ -9,13 +9,20 @@ const verifyToken = require('../middleware/verifyToken');
 const router = express.Router();
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 
+const cookieOptions = {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    maxAge: 7 * 24 * 60 * 60 * 1000,
+};
+
 // ----- REGISTER -----
 router.post('/register', async (req, res) => {
     try {
         const { name, email, photoURL, password, role } = req.body;
 
         if (!name || !email || !password || !role) {
-            return res.status(400).json({ error: 'All fields required: name, email, password, role' });
+            return res.status(400).json({ error: 'All fields required' });
         }
 
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -32,9 +39,7 @@ router.post('/register', async (req, res) => {
         }
 
         const db = await getDb();
-        const users = db.collection('users');
-
-        const existing = await users.findOne({ email: email.toLowerCase() });
+        const existing = await db.collection('users').findOne({ email: email.toLowerCase() });
         if (existing) {
             return res.status(400).json({ error: 'Email already registered' });
         }
@@ -54,7 +59,7 @@ router.post('/register', async (req, res) => {
             createdAt: new Date(),
         };
 
-        await users.insertOne(newUser);
+        await db.collection('users').insertOne(newUser);
 
         const token = jwt.sign(
             { email: newUser.email, role: newUser.role, name: newUser.name },
@@ -62,9 +67,10 @@ router.post('/register', async (req, res) => {
             { expiresIn: '7d' }
         );
 
+        res.cookie('token', token, cookieOptions);
+
         res.status(201).json({
             message: 'Registration successful',
-            token,
             user: {
                 name: newUser.name,
                 email: newUser.email,
@@ -106,9 +112,10 @@ router.post('/login', async (req, res) => {
             { expiresIn: '7d' }
         );
 
+        res.cookie('token', token, cookieOptions);
+
         res.json({
             message: 'Login successful',
-            token,
             user: {
                 name: user.name,
                 email: user.email,
@@ -146,8 +153,7 @@ router.post('/google-login', async (req, res) => {
         }
 
         const db = await getDb();
-        const users = db.collection('users');
-        let user = await users.findOne({ email: email.toLowerCase() });
+        let user = await db.collection('users').findOne({ email: email.toLowerCase() });
 
         if (!user) {
             const newUser = {
@@ -159,7 +165,7 @@ router.post('/google-login', async (req, res) => {
                 credits: 50,
                 createdAt: new Date(),
             };
-            await users.insertOne(newUser);
+            await db.collection('users').insertOne(newUser);
             user = newUser;
         }
 
@@ -169,9 +175,10 @@ router.post('/google-login', async (req, res) => {
             { expiresIn: '7d' }
         );
 
+        res.cookie('token', token, cookieOptions);
+
         res.json({
             message: 'Google sign-in successful',
-            token,
             user: {
                 name: user.name,
                 email: user.email,
@@ -187,14 +194,36 @@ router.post('/google-login', async (req, res) => {
     }
 });
 
+// ----- GET CURRENT USER -----
+router.get('/me', verifyToken, async (req, res) => {
+    try {
+        const db = await getDb();
+        const user = await db.collection('users').findOne(
+            { email: req.user.email },
+            { projection: { password: 0 } }
+        );
+        if (!user) return res.status(404).json({ error: 'User not found' });
+        res.json({ user });
+    } catch (err) {
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// ----- LOGOUT -----
+router.post('/logout', (req, res) => {
+    res.clearCookie('token', {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+    });
+    res.json({ message: 'Logged out' });
+});
+
 // ----- UPDATE PROFILE -----
 router.put('/profile', verifyToken, async (req, res) => {
     try {
         const { name, photoURL } = req.body;
-
-        if (!name) {
-            return res.status(400).json({ error: 'Name is required' });
-        }
+        if (!name) return res.status(400).json({ error: 'Name is required' });
 
         const db = await getDb();
         await db.collection('users').updateOne(
@@ -207,19 +236,8 @@ router.put('/profile', verifyToken, async (req, res) => {
             { projection: { password: 0 } }
         );
 
-        res.json({
-            message: 'Profile updated',
-            user: {
-                name: updated.name,
-                email: updated.email,
-                role: updated.role,
-                credits: updated.credits,
-                photoURL: updated.photoURL,
-                createdAt: updated.createdAt,
-            },
-        });
+        res.json({ message: 'Profile updated', user: updated });
     } catch (err) {
-        console.error('Profile update error:', err);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
@@ -228,11 +246,9 @@ router.put('/profile', verifyToken, async (req, res) => {
 router.put('/change-password', verifyToken, async (req, res) => {
     try {
         const { currentPassword, newPassword } = req.body;
-
         if (!currentPassword || !newPassword) {
             return res.status(400).json({ error: 'Current and new password required' });
         }
-
         if (newPassword.length < 6) {
             return res.status(400).json({ error: 'New password must be at least 6 characters' });
         }
@@ -240,12 +256,9 @@ router.put('/change-password', verifyToken, async (req, res) => {
         const db = await getDb();
         const user = await db.collection('users').findOne({ email: req.user.email });
 
-        // If user has no password (Google sign-in), set new password directly
         if (user.password) {
             const isMatch = await bcrypt.compare(currentPassword, user.password);
-            if (!isMatch) {
-                return res.status(400).json({ error: 'Current password is incorrect' });
-            }
+            if (!isMatch) return res.status(400).json({ error: 'Current password is incorrect' });
         }
 
         const salt = await bcrypt.genSalt(10);
@@ -258,7 +271,6 @@ router.put('/change-password', verifyToken, async (req, res) => {
 
         res.json({ message: 'Password changed successfully' });
     } catch (err) {
-        console.error('Change password error:', err);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
@@ -266,26 +278,21 @@ router.put('/change-password', verifyToken, async (req, res) => {
 // ----- GET ALL USERS (ADMIN) -----
 router.get('/users', async (req, res) => {
     try {
-        const authHeader = req.headers.authorization;
-        if (!authHeader || !authHeader.startsWith('Bearer ')) {
-            return res.status(401).json({ error: 'Access denied' });
-        }
+        const token = req.cookies?.token ||
+            (req.headers.authorization?.startsWith('Bearer ') ?
+                req.headers.authorization.split(' ')[1] : null);
 
-        const token = authHeader.split(' ')[1];
+        if (!token) return res.status(401).json({ error: 'Access denied' });
+
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
-
-        if (decoded.role !== 'admin') {
-            return res.status(403).json({ error: 'Admin access required' });
-        }
+        if (decoded.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
 
         const db = await getDb();
         const { role } = req.query;
         const filter = role ? { role } : {};
         const users = await db.collection('users').find(filter).project({ password: 0 }).toArray();
-
         res.json(users);
     } catch (err) {
-        console.error('Get users error:', err);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
