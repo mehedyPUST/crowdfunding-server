@@ -3,10 +3,10 @@ const express = require('express');
 const { ObjectId } = require('mongodb');
 const getDb = require('../db');
 const verifyToken = require('../middleware/verifyToken');
+const notificationHelper = require('./notification');
 
 const router = express.Router();
 
-// Middleware: Admin only
 const adminOnly = (req, res, next) => {
     if (req.user.role !== 'admin') {
         return res.status(403).json({ error: 'Admin access required' });
@@ -20,7 +20,7 @@ router.get('/users', verifyToken, adminOnly, async (req, res) => {
         const db = await getDb();
         const { role } = req.query;
         const filter = role ? { role } : {};
-        const users = await db.collection('users').find(filter).toArray();
+        const users = await db.collection('users').find(filter).project({ password: 0 }).toArray();
         res.json(users);
     } catch (err) {
         res.status(500).json({ error: 'Internal server error' });
@@ -34,13 +34,11 @@ router.patch('/users/:id/role', verifyToken, adminOnly, async (req, res) => {
         if (!['supporter', 'creator', 'admin'].includes(role)) {
             return res.status(400).json({ error: 'Invalid role' });
         }
-
         const db = await getDb();
         await db.collection('users').updateOne(
             { _id: new ObjectId(req.params.id) },
             { $set: { role } }
         );
-
         res.json({ message: 'Role updated' });
     } catch (err) {
         res.status(500).json({ error: 'Internal server error' });
@@ -73,10 +71,20 @@ router.get('/campaigns/pending', verifyToken, adminOnly, async (req, res) => {
 router.patch('/campaigns/:id/approve', verifyToken, adminOnly, async (req, res) => {
     try {
         const db = await getDb();
+        const campaign = await db.collection('campaigns').findOne({ _id: new ObjectId(req.params.id) });
+        if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+
         await db.collection('campaigns').updateOne(
             { _id: new ObjectId(req.params.id) },
             { $set: { status: 'approved' } }
         );
+
+        await notificationHelper.addNotification(
+            campaign.creatorEmail,
+            `Your campaign "${campaign.title}" has been approved!`,
+            '/dashboard/my-campaigns'
+        );
+
         res.json({ message: 'Campaign approved' });
     } catch (err) {
         res.status(500).json({ error: 'Internal server error' });
@@ -87,10 +95,20 @@ router.patch('/campaigns/:id/approve', verifyToken, adminOnly, async (req, res) 
 router.patch('/campaigns/:id/reject', verifyToken, adminOnly, async (req, res) => {
     try {
         const db = await getDb();
+        const campaign = await db.collection('campaigns').findOne({ _id: new ObjectId(req.params.id) });
+        if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+
         await db.collection('campaigns').updateOne(
             { _id: new ObjectId(req.params.id) },
             { $set: { status: 'rejected' } }
         );
+
+        await notificationHelper.addNotification(
+            campaign.creatorEmail,
+            `Your campaign "${campaign.title}" was rejected.`,
+            '/dashboard/my-campaigns'
+        );
+
         res.json({ message: 'Campaign rejected' });
     } catch (err) {
         res.status(500).json({ error: 'Internal server error' });
@@ -120,7 +138,7 @@ router.get('/withdrawals/pending', verifyToken, adminOnly, async (req, res) => {
     }
 });
 
-// Approve withdrawal (payment success)
+// Approve withdrawal
 router.patch('/withdrawals/:id/approve', verifyToken, adminOnly, async (req, res) => {
     try {
         const db = await getDb();
@@ -132,7 +150,6 @@ router.patch('/withdrawals/:id/approve', verifyToken, adminOnly, async (req, res
             { $set: { status: 'approved' } }
         );
 
-        // Decrease creator's raised credits proportionally across campaigns
         const campaigns = await db.collection('campaigns').find({ creatorEmail: withdrawal.creatorEmail }).toArray();
         let remaining = withdrawal.withdrawalCredits;
         for (const camp of campaigns) {
@@ -144,6 +161,12 @@ router.patch('/withdrawals/:id/approve', verifyToken, adminOnly, async (req, res
             );
             remaining -= deduct;
         }
+
+        await notificationHelper.addNotification(
+            withdrawal.creatorEmail,
+            `Your withdrawal of $${withdrawal.withdrawalAmount} has been processed.`,
+            '/dashboard/withdrawals'
+        );
 
         res.json({ message: 'Withdrawal approved' });
     } catch (err) {

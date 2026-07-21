@@ -1,7 +1,9 @@
+require('dotenv').config();
 const express = require('express');
 const { ObjectId } = require('mongodb');
 const getDb = require('../db');
 const verifyToken = require('../middleware/verifyToken');
+const notificationHelper = require('./notification');
 
 const router = express.Router();
 
@@ -39,6 +41,13 @@ router.post('/', verifyToken, async (req, res) => {
         };
 
         await db.collection('contributions').insertOne(contribution);
+
+        // Notify creator
+        await notificationHelper.addNotification(
+            creatorEmail,
+            `${req.user.name} contributed ${amount} credits to your campaign "${campaignTitle}"`,
+            '/dashboard'
+        );
 
         res.status(201).json({ message: 'Contribution submitted for review' });
     } catch (err) {
@@ -103,6 +112,13 @@ router.patch('/:id/approve', verifyToken, async (req, res) => {
             { $inc: { raisedAmount: contrib.amount } }
         );
 
+        // Notify supporter
+        await notificationHelper.addNotification(
+            contrib.contributorEmail,
+            `Your contribution of ${contrib.amount} credits to "${contrib.campaignTitle}" was approved by ${req.user.name}`,
+            '/dashboard/my-contributions'
+        );
+
         res.json({ message: 'Contribution approved' });
     } catch (err) {
         console.error('Approve error:', err);
@@ -125,6 +141,13 @@ router.patch('/:id/reject', verifyToken, async (req, res) => {
         await db.collection('users').updateOne(
             { email: contrib.contributorEmail },
             { $inc: { credits: contrib.amount } }
+        );
+
+        // Notify supporter
+        await notificationHelper.addNotification(
+            contrib.contributorEmail,
+            `Your contribution of ${contrib.amount} credits to "${contrib.campaignTitle}" was rejected by ${req.user.name}. Credits refunded.`,
+            '/dashboard/my-contributions'
         );
 
         res.json({ message: 'Contribution rejected and refunded' });
