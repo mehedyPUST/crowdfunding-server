@@ -17,7 +17,7 @@ app.use(express.json());
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/campaigns', require('./routes/campaign'));
 app.use('/api/withdrawals', require('./routes/withdrawal'));
-
+app.use('/api/contributions', require('./routes/contribution'));
 
 app.get('/', (req, res) => {
     res.json({ message: 'Crowdfunding API is running' });

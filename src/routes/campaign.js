@@ -90,6 +90,37 @@ router.put('/:id', verifyToken, async (req, res) => {
     }
 });
 
+// Get approved campaigns (for supporters to explore)
+router.get('/', async (req, res) => {
+    try {
+        const db = await getDb();
+        const now = new Date();
+        const campaigns = await db
+            .collection('campaigns')
+            .find({ status: 'approved', deadline: { $gt: now } })
+            .sort({ createdAt: -1 })
+            .toArray();
+
+        res.json(campaigns);
+    } catch (err) {
+        console.error('Explore campaigns error:', err);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// Get single campaign
+router.get('/:id', async (req, res) => {
+    try {
+        const db = await getDb();
+        const campaign = await db.collection('campaigns').findOne({ _id: new ObjectId(req.params.id) });
+        if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+        res.json(campaign);
+    } catch (err) {
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+
 // Delete campaign
 router.delete('/:id', verifyToken, async (req, res) => {
     try {
