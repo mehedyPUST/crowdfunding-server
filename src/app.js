@@ -17,7 +17,7 @@ app.use(express.json());
 app.use('/api/auth', require('./routes/auth'));
 
 // ❌ বাকি সব রুট কমেন্ট করা আছে – একটি একটি করে খুলবে
-// app.use('/api/campaigns', require('./routes/campaign'));
+app.use('/api/campaigns', require('./routes/campaign'));
 // app.use('/api/withdrawals', require('./routes/withdrawal'));
 // app.use('/api/contributions', require('./routes/contribution'));
 // app.use('/api/payments', require('./routes/payment'));
