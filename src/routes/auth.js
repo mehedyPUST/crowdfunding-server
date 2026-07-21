@@ -12,7 +12,7 @@ const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const cookieOptions = {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
     maxAge: 7 * 24 * 60 * 60 * 1000,
 };
 
@@ -22,7 +22,7 @@ router.post('/register', async (req, res) => {
         const { name, email, photoURL, password, role } = req.body;
 
         if (!name || !email || !password || !role) {
-            return res.status(400).json({ error: 'All fields required' });
+            return res.status(400).json({ error: 'All fields required: name, email, password, role' });
         }
 
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -39,7 +39,9 @@ router.post('/register', async (req, res) => {
         }
 
         const db = await getDb();
-        const existing = await db.collection('users').findOne({ email: email.toLowerCase() });
+        const users = db.collection('users');
+
+        const existing = await users.findOne({ email: email.toLowerCase() });
         if (existing) {
             return res.status(400).json({ error: 'Email already registered' });
         }
@@ -59,7 +61,7 @@ router.post('/register', async (req, res) => {
             createdAt: new Date(),
         };
 
-        await db.collection('users').insertOne(newUser);
+        await users.insertOne(newUser);
 
         const token = jwt.sign(
             { email: newUser.email, role: newUser.role, name: newUser.name },
@@ -153,7 +155,8 @@ router.post('/google-login', async (req, res) => {
         }
 
         const db = await getDb();
-        let user = await db.collection('users').findOne({ email: email.toLowerCase() });
+        const users = db.collection('users');
+        let user = await users.findOne({ email: email.toLowerCase() });
 
         if (!user) {
             const newUser = {
@@ -165,7 +168,7 @@ router.post('/google-login', async (req, res) => {
                 credits: 50,
                 createdAt: new Date(),
             };
-            await db.collection('users').insertOne(newUser);
+            await users.insertOne(newUser);
             user = newUser;
         }
 
@@ -214,7 +217,7 @@ router.post('/logout', (req, res) => {
     res.clearCookie('token', {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
+        sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
     });
     res.json({ message: 'Logged out' });
 });
@@ -223,7 +226,10 @@ router.post('/logout', (req, res) => {
 router.put('/profile', verifyToken, async (req, res) => {
     try {
         const { name, photoURL } = req.body;
-        if (!name) return res.status(400).json({ error: 'Name is required' });
+
+        if (!name) {
+            return res.status(400).json({ error: 'Name is required' });
+        }
 
         const db = await getDb();
         await db.collection('users').updateOne(
@@ -236,8 +242,19 @@ router.put('/profile', verifyToken, async (req, res) => {
             { projection: { password: 0 } }
         );
 
-        res.json({ message: 'Profile updated', user: updated });
+        res.json({
+            message: 'Profile updated',
+            user: {
+                name: updated.name,
+                email: updated.email,
+                role: updated.role,
+                credits: updated.credits,
+                photoURL: updated.photoURL,
+                createdAt: updated.createdAt,
+            },
+        });
     } catch (err) {
+        console.error('Profile update error:', err);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
@@ -246,9 +263,11 @@ router.put('/profile', verifyToken, async (req, res) => {
 router.put('/change-password', verifyToken, async (req, res) => {
     try {
         const { currentPassword, newPassword } = req.body;
+
         if (!currentPassword || !newPassword) {
             return res.status(400).json({ error: 'Current and new password required' });
         }
+
         if (newPassword.length < 6) {
             return res.status(400).json({ error: 'New password must be at least 6 characters' });
         }
@@ -258,7 +277,9 @@ router.put('/change-password', verifyToken, async (req, res) => {
 
         if (user.password) {
             const isMatch = await bcrypt.compare(currentPassword, user.password);
-            if (!isMatch) return res.status(400).json({ error: 'Current password is incorrect' });
+            if (!isMatch) {
+                return res.status(400).json({ error: 'Current password is incorrect' });
+            }
         }
 
         const salt = await bcrypt.genSalt(10);
@@ -271,6 +292,7 @@ router.put('/change-password', verifyToken, async (req, res) => {
 
         res.json({ message: 'Password changed successfully' });
     } catch (err) {
+        console.error('Change password error:', err);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
@@ -282,17 +304,24 @@ router.get('/users', async (req, res) => {
             (req.headers.authorization?.startsWith('Bearer ') ?
                 req.headers.authorization.split(' ')[1] : null);
 
-        if (!token) return res.status(401).json({ error: 'Access denied' });
+        if (!token) {
+            return res.status(401).json({ error: 'Access denied' });
+        }
 
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        if (decoded.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
+
+        if (decoded.role !== 'admin') {
+            return res.status(403).json({ error: 'Admin access required' });
+        }
 
         const db = await getDb();
         const { role } = req.query;
         const filter = role ? { role } : {};
         const users = await db.collection('users').find(filter).project({ password: 0 }).toArray();
+
         res.json(users);
     } catch (err) {
+        console.error('Get users error:', err);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
