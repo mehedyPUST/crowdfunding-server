@@ -1,6 +1,8 @@
 const express = require('express');
+require('dotenv').config();
 const getDb = require('../db');
 const verifyToken = require('../middleware/verifyToken');
+
 
 const router = express.Router();
 const stripe = require('stripe')(process.env.STRIPE_SECRET);
